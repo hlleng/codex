@@ -5,6 +5,10 @@ use clap::Args;
 use codex_protocol::config_types::ProfileV2Name;
 use std::path::PathBuf;
 
+#[cfg(test)]
+#[path = "shared_options_tests.rs"]
+mod tests;
+
 #[derive(Args, Clone, Debug, Default)]
 pub struct SharedCliOptions {
     /// Optional image(s) to attach to the initial prompt.
@@ -33,6 +37,10 @@ pub struct SharedCliOptions {
     /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.
     #[arg(long = "profile", short = 'p')]
     pub config_profile_v2: Option<ProfileV2Name>,
+
+    /// Do not load system config files under `/etc/codex`.
+    #[arg(long = "ignore-system-config", default_value_t = false)]
+    pub ignore_system_config: bool,
 
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
@@ -72,6 +80,7 @@ impl SharedCliOptions {
             oss,
             oss_provider,
             config_profile_v2,
+            ignore_system_config,
             sandbox_mode,
             dangerously_bypass_approvals_and_sandbox,
             bypass_hook_trust,
@@ -84,6 +93,7 @@ impl SharedCliOptions {
             oss: root_oss,
             oss_provider: root_oss_provider,
             config_profile_v2: root_config_profile_v2,
+            ignore_system_config: root_ignore_system_config,
             sandbox_mode: root_sandbox_mode,
             dangerously_bypass_approvals_and_sandbox: root_dangerously_bypass_approvals_and_sandbox,
             bypass_hook_trust: root_bypass_hook_trust,
@@ -102,6 +112,9 @@ impl SharedCliOptions {
         }
         if config_profile_v2.is_none() {
             config_profile_v2.clone_from(root_config_profile_v2);
+        }
+        if *root_ignore_system_config {
+            *ignore_system_config = true;
         }
         if sandbox_mode.is_none() {
             *sandbox_mode = *root_sandbox_mode;
@@ -137,6 +150,7 @@ impl SharedCliOptions {
             oss,
             oss_provider,
             config_profile_v2,
+            ignore_system_config,
             sandbox_mode,
             dangerously_bypass_approvals_and_sandbox,
             bypass_hook_trust,
@@ -155,6 +169,9 @@ impl SharedCliOptions {
         }
         if let Some(config_profile_v2) = config_profile_v2 {
             self.config_profile_v2 = Some(config_profile_v2);
+        }
+        if ignore_system_config {
+            self.ignore_system_config = true;
         }
         if subcommand_selected_sandbox_mode {
             self.sandbox_mode = sandbox_mode;

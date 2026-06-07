@@ -1,0 +1,231 @@
+name: 构建可移植 Codex
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repository:
+        description: "要构建的源码仓库；留空表示当前仓库，填 openai/codex 可构建纯上游"
+        required: false
+        type: string
+      source_ref:
+        description: "要构建的分支、tag 或 commit；当前仓库留空表示当前 ref，外部仓库留空表示 main"
+        required: false
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/actions/setup-rusty-v8/**"
+      - ".github/scripts/build-codex-package-archive.sh"
+      - ".github/scripts/install-musl-build-tools.sh"
+      - ".github/scripts/rusty_v8_bazel.py"
+      - ".github/workflows/build-portable-codex.yml"
+      - "codex-rs/**"
+      - "scripts/codex_package/**"
+      - "scripts/build_codex_package.py"
+  schedule:
+    # GitHub Actions 不能直接监听上游仓库 push；这里每天定时构建一次上游 main。
+    - cron: "37 18 * * *"
+
+permissions:
+  contents: read
+
+env:
+  TARGET: x86_64-unknown-linux-musl
+
+jobs:
+  build:
+    name: 构建 codex-clean
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: 解析源码来源
+        id: source
+        shell: bash
+        env:
+          INPUT_REPOSITORY: ${{ github.event.inputs.source_repository || '' }}
+          INPUT_REF: ${{ github.event.inputs.source_ref || '' }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            repository="${INPUT_REPOSITORY:-openai/codex}"
+            ref="${INPUT_REF:-main}"
+          elif [[ -n "${INPUT_REPOSITORY}" ]]; then
+            repository="${INPUT_REPOSITORY}"
+            ref="${INPUT_REF:-main}"
+          else
+            repository="${GITHUB_REPOSITORY}"
+            ref="${INPUT_REF:-${GITHUB_REF_NAME}}"
+          fi
+
+          echo "repository=${repository}" >> "$GITHUB_OUTPUT"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "构建源码: ${repository}@${ref}"
+
+      - name: 检出源码
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ steps.source.outputs.repository }}
+          ref: ${{ steps.source.outputs.ref }}
+          persist-credentials: false
+
+      - name: 记录源码版本
+        id: revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "源码 commit: ${sha}"
+
+      - name: 打印 runner 信息
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "OS: $(uname -a)"
+          echo "CPU: $(nproc)"
+          awk '/MemTotal/ {printf "MemTotal: %.1f GiB\n", $2 / 1024 / 1024}' /proc/meminfo
+          df -h .
+
+      - name: 安装 Rust target
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup show
+          rustup target add "$TARGET"
+
+      - name: 使用隔离 Cargo home
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          : > "${cargo_home}/config.toml"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+
+      - name: 安装 Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: 安装 musl 构建工具
+        shell: bash
+        env:
+          TARGET: ${{ env.TARGET }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - name: 配置 musl 下 aws-lc
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY_${TARGET//-/_}=1" >> "$GITHUB_ENV"
+
+      - name: 配置 rusty_v8 预编译产物
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ env.TARGET }}
+
+      - name: 构建 codex 静态二进制
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo rustc \
+            -p codex-cli \
+            --target "$TARGET" \
+            --release \
+            --bin codex \
+            -- \
+            -C target-feature=+crt-static \
+            -C relocation-model=static \
+            -C link-arg=-static \
+            -C link-arg=-no-pie
+
+      - name: 构建 bwrap 静态二进制
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo rustc \
+            -p codex-bwrap \
+            --target "$TARGET" \
+            --release \
+            --bin bwrap \
+            -- \
+            -C target-feature=+crt-static \
+            -C relocation-model=static \
+            -C link-arg=-static \
+            -C link-arg=-no-pie
+
+      - name: 生成 codex-clean 包
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist/codex-clean
+          python3 scripts/build_codex_package.py \
+            --target "$TARGET" \
+            --variant codex \
+            --entrypoint-bin "codex-rs/target/${TARGET}/release/codex" \
+            --bwrap-bin "codex-rs/target/${TARGET}/release/bwrap" \
+            --cargo-profile release \
+            --package-dir dist/codex-clean \
+            --force
+
+          archive="codex-clean-${TARGET}-${{ steps.revision.outputs.short_sha }}.tar.gz"
+          tar -C dist -czf "dist/${archive}" codex-clean
+          cp "dist/${archive}" "dist/codex-clean-${TARGET}.tar.gz"
+          echo "ARCHIVE=dist/${archive}" >> "$GITHUB_ENV"
+
+      - name: 验证产物
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_root="${RUNNER_TEMP}/codex-clean-verify"
+          rm -rf "$verify_root"
+          mkdir -p "$verify_root"
+          tar -xzf "$ARCHIVE" -C "$verify_root"
+
+          codex_bin="${verify_root}/codex-clean/bin/codex"
+          bwrap_bin="${verify_root}/codex-clean/codex-resources/bwrap"
+
+          for bin in "$codex_bin" "$bwrap_bin"; do
+            file "$bin"
+            ldd_output="${RUNNER_TEMP}/${bin##*/}.ldd"
+            if ldd "$bin" 2>&1 | tee "$ldd_output"; then
+              :
+            elif grep -q "not a dynamic executable" "$ldd_output"; then
+              echo "${bin} 是静态可执行文件，ldd 返回非 0 属于预期"
+            else
+              echo "${bin} 的 ldd 检查失败" >&2
+              exit 1
+            fi
+
+            if readelf -l "$bin" | grep -q INTERP; then
+              echo "${bin} 仍包含 INTERP 段" >&2
+              exit 1
+            fi
+          done
+
+          "$codex_bin" --version
+          if "$codex_bin" --help | grep -q -- "--ignore-system-config"; then
+            echo "已包含 --ignore-system-config"
+          else
+            echo "未发现 --ignore-system-config；如果构建的是纯上游，这是预期结果"
+          fi
+
+      - name: 上传 codex-clean
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codex-clean-${{ env.TARGET }}-${{ steps.revision.outputs.short_sha }}
+          path: |
+            dist/codex-clean-${{ env.TARGET }}-${{ steps.revision.outputs.short_sha }}.tar.gz
+            dist/codex-clean-${{ env.TARGET }}.tar.gz
+          if-no-files-found: error

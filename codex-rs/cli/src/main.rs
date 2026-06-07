@@ -992,8 +992,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             // Propagate any root-level config overrides (e.g. `-c key=value`).
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
-            let loader_overrides =
-                loader_overrides_for_profile(interactive.config_profile_v2.as_ref())?;
+            let loader_overrides = loader_overrides_for_profile(
+                interactive.config_profile_v2.as_ref(),
+                interactive.ignore_system_config,
+            )?;
             mcp_cli.run(loader_overrides).await?;
         }
         Some(Subcommand::Plugin(plugin_cli)) => {
@@ -1363,7 +1365,8 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 .config_profile
                 .as_ref()
                 .or(interactive.config_profile_v2.as_ref());
-            let loader_overrides = loader_overrides_for_profile(config_profile)?;
+            let loader_overrides =
+                loader_overrides_for_profile(config_profile, interactive.ignore_system_config)?;
             prepend_config_flags(
                 &mut sandbox_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -1762,6 +1765,7 @@ async fn disable_feature_in_config(feature: &str) -> anyhow::Result<()> {
 
 fn loader_overrides_for_profile(
     profile_v2: Option<&ProfileV2Name>,
+    ignore_system_config: bool,
 ) -> anyhow::Result<LoaderOverrides> {
     match profile_v2 {
         Some(profile_v2) => {
@@ -1769,10 +1773,14 @@ fn loader_overrides_for_profile(
             Ok(LoaderOverrides {
                 user_config_path: Some(resolve_profile_v2_config_path(&codex_home, profile_v2)),
                 user_config_profile: Some(profile_v2.clone()),
+                ignore_system_config,
                 ..Default::default()
             })
         }
-        None => Ok(LoaderOverrides::default()),
+        None => Ok(LoaderOverrides {
+            ignore_system_config,
+            ..Default::default()
+        }),
     }
 }
 
@@ -1810,7 +1818,10 @@ async fn run_debug_prompt_input_command(
     interactive: TuiCli,
     arg0_paths: Arg0DispatchPaths,
 ) -> anyhow::Result<()> {
-    let loader_overrides = loader_overrides_for_profile(interactive.config_profile_v2.as_ref())?;
+    let loader_overrides = loader_overrides_for_profile(
+        interactive.config_profile_v2.as_ref(),
+        interactive.ignore_system_config,
+    )?;
     let shared = interactive.shared.into_inner();
     let mut cli_kv_overrides = root_config_overrides
         .parse_overrides()
@@ -3211,6 +3222,20 @@ mod tests {
                 ..
             }))
         );
+    }
+
+    #[test]
+    fn ignore_system_config_parses_at_root_and_exec() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "--ignore-system-config"]).expect("root parse");
+        assert!(cli.interactive.ignore_system_config);
+
+        let cli = MultitoolCli::try_parse_from(["codex", "exec", "--ignore-system-config"])
+            .expect("exec parse");
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+        assert!(exec.ignore_system_config);
     }
 
     #[test]

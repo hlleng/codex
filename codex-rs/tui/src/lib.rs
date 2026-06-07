@@ -878,6 +878,7 @@ fn loader_overrides_are_default(loader_overrides: &LoaderOverrides) -> bool {
         && loader_overrides.managed_config_path.is_none()
         && loader_overrides.system_config_path.is_none()
         && loader_overrides.system_requirements_path.is_none()
+        && !loader_overrides.ignore_system_config
         && !loader_overrides.ignore_managed_requirements
         && !loader_overrides.ignore_user_config
         && !loader_overrides.ignore_user_and_project_exec_policy_rules
@@ -955,6 +956,9 @@ pub async fn run_main(
     };
 
     let mut launch_loader_overrides = loader_overrides.clone();
+    if cli.ignore_system_config {
+        launch_loader_overrides.ignore_system_config = true;
+    }
     if let Some(profile_v2) = cli.config_profile_v2.as_ref() {
         let user_config_path = resolve_profile_v2_config_path(&codex_home, profile_v2);
         launch_loader_overrides.user_config_path = Some(user_config_path);
@@ -997,6 +1001,9 @@ pub async fn run_main(
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
     let mut loader_overrides = loader_overrides;
+    if cli.ignore_system_config {
+        loader_overrides.ignore_system_config = true;
+    }
     if let Some(profile_v2) = cli.config_profile_v2.as_ref() {
         let user_config_path = resolve_profile_v2_config_path(&codex_home, profile_v2);
         loader_overrides.user_config_path = Some(user_config_path);

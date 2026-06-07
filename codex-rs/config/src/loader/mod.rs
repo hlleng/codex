@@ -104,6 +104,10 @@ async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> O
 ///
 /// (*) Only available on macOS via managed device profiles.
 ///
+/// `--ignore-system-config` skips file-based system inputs such as
+/// `/etc/codex/config.toml`, `/etc/codex/requirements.toml`, and
+/// `/etc/codex/managed_config.toml`.
+///
 /// See https://developers.openai.com/codex/security for details.
 ///
 /// When loading the config stack for a thread, there should be a `cwd`
@@ -125,6 +129,7 @@ pub async fn load_config_layers_state(
         cloud_config_bundle,
     } = options.into();
     let active_user_profile = overrides.user_config_profile.clone();
+    let ignore_system_config = overrides.ignore_system_config;
     let ignore_managed_requirements = overrides.ignore_managed_requirements;
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_user_and_project_exec_policy_rules =
@@ -165,9 +170,11 @@ pub async fn load_config_layers_state(
             managed_preferences_requirements_layer = None;
         }
 
-        // Honor the system requirements.toml location.
-        let requirements_toml_file = system_requirements_toml_file_with_overrides(&overrides)?;
-        system_requirements_layer = load_requirements_toml(fs, &requirements_toml_file).await?;
+        if !ignore_system_config {
+            // Honor the system requirements.toml location.
+            let requirements_toml_file = system_requirements_toml_file_with_overrides(&overrides)?;
+            system_requirements_layer = load_requirements_toml(fs, &requirements_toml_file).await?;
+        }
     } else {
         managed_preferences_requirements_layer = None;
     }
@@ -216,24 +223,26 @@ pub async fn load_config_layers_state(
         )?)
     };
 
-    // Include an entry for the "system" config folder, loading its config.toml,
-    // if it exists.
-    let system_config_toml_file = system_config_toml_file_with_overrides(&overrides)?;
-    let system_layer = load_config_toml_for_required_layer(
-        fs,
-        &system_config_toml_file,
-        strict_config,
-        |config_toml| {
-            ConfigLayerEntry::new(
-                ConfigLayerSource::System {
-                    file: system_config_toml_file.clone(),
-                },
-                config_toml,
-            )
-        },
-    )
-    .await?;
-    layers.push(system_layer);
+    if !ignore_system_config {
+        // Include an entry for the "system" config folder, loading its
+        // config.toml, if it exists.
+        let system_config_toml_file = system_config_toml_file_with_overrides(&overrides)?;
+        let system_layer = load_config_toml_for_required_layer(
+            fs,
+            &system_config_toml_file,
+            strict_config,
+            |config_toml| {
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::System {
+                        file: system_config_toml_file.clone(),
+                    },
+                    config_toml,
+                )
+            },
+        )
+        .await?;
+        layers.push(system_layer);
+    }
     layers.extend(cloud_config_layers);
 
     // Add the base user config layer. When profile-v2 is selected, add the

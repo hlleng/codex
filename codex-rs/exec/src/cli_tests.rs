@@ -65,11 +65,13 @@ fn resume_accepts_output_flags_after_subcommand() {
 fn parses_config_isolation_flags() {
     let cli = Cli::parse_from([
         "codex-exec",
+        "--ignore-system-config",
         "--ignore-user-config",
         "--ignore-rules",
         "summarize",
     ]);
 
+    assert!(cli.ignore_system_config);
     assert!(cli.ignore_user_config);
     assert!(cli.ignore_rules);
 }

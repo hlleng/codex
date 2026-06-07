@@ -265,6 +265,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         oss,
         oss_provider,
         config_profile_v2,
+        ignore_system_config,
         sandbox_mode: sandbox_mode_cli_arg,
         dangerously_bypass_approvals_and_sandbox,
         bypass_hook_trust,
@@ -326,6 +327,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     let loader_overrides = LoaderOverrides {
         user_config_path,
         user_config_profile: config_profile_v2,
+        ignore_system_config,
         ignore_user_config,
         ignore_user_and_project_exec_policy_rules: ignore_rules,
         ..Default::default()

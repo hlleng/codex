@@ -48,30 +48,36 @@ pub(super) async fn load_config_layers_internal(
     let LoaderOverrides {
         managed_config_path,
         managed_preferences_base64,
+        ignore_system_config,
         ..
     } = overrides;
 
     #[cfg(not(target_os = "macos"))]
     let LoaderOverrides {
         managed_config_path,
+        ignore_system_config,
         ..
     } = overrides;
 
-    let managed_config_path = AbsolutePathBuf::from_absolute_path(
-        managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home)),
-    )?;
+    let managed_config = if ignore_system_config {
+        None
+    } else {
+        let managed_config_path = AbsolutePathBuf::from_absolute_path(
+            managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home)),
+        )?;
 
-    let managed_config = read_config_from_path(
-        fs,
-        &managed_config_path,
-        /*log_missing_as_info*/ false,
-        strict_config,
-    )
-    .await?
-    .map(|loaded| MangedConfigFromFile {
-        managed_config: loaded,
-        file: managed_config_path.clone(),
-    });
+        read_config_from_path(
+            fs,
+            &managed_config_path,
+            /*log_missing_as_info*/ false,
+            strict_config,
+        )
+        .await?
+        .map(|loaded| MangedConfigFromFile {
+            managed_config: loaded,
+            file: managed_config_path.clone(),
+        })
+    };
 
     #[cfg(target_os = "macos")]
     let managed_preferences = load_managed_admin_config_layer(

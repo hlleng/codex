@@ -1974,6 +1974,81 @@ async fn load_config_layers_can_ignore_managed_requirements() -> anyhow::Result<
 }
 
 #[tokio::test]
+async fn load_config_layers_can_ignore_system_config_files() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"model = "user"
+"#,
+    )
+    .await?;
+
+    let system_config_path = tmp.path().join("system_config.toml");
+    tokio::fs::write(
+        &system_config_path,
+        r#"review_model = "system"
+"#,
+    )
+    .await?;
+    let managed_config_path = tmp.path().join("managed_config.toml");
+    tokio::fs::write(
+        &managed_config_path,
+        r#"model = "managed"
+"#,
+    )
+    .await?;
+    let system_requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &system_requirements_path,
+        r#"allowed_sandbox_modes = ["read-only"]
+"#,
+    )
+    .await?;
+
+    let mut overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_config_path);
+    overrides.system_config_path = Some(system_config_path);
+    overrides.system_requirements_path = Some(system_requirements_path);
+    overrides.ignore_system_config = true;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        overrides,
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    assert_eq!(
+        layers
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ false,
+            )
+            .iter()
+            .map(|layer| layer.name.clone())
+            .collect::<Vec<_>>(),
+        vec![ConfigLayerSource::User {
+            file: AbsolutePathBuf::from_absolute_path(codex_home.join(CONFIG_TOML_FILE))?,
+            profile: None,
+        }]
+    );
+    let merged = layers.effective_config();
+    assert_eq!(
+        merged.get("model").and_then(TomlValue::as_str),
+        Some("user")
+    );
+    assert_eq!(merged.get("review_model"), None);
+    assert_eq!(layers.requirements_toml().allowed_sandbox_modes, None);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_layers_includes_cloud_hook_requirements() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
